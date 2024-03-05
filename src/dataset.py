@@ -33,6 +33,7 @@ class T5Dataset(Dataset):
         exclude_unans=False, # exclude unanswerable questions b/c they have no valid sql.
         random_seed=0,
         append_schema_info=False,
+        answerable_or_not_binary=False,
     ):
 
         super().__init__()
@@ -68,10 +69,12 @@ class T5Dataset(Dataset):
             if exclude_unans:
                 if sample["id"] in label and label[sample["id"]] == "null":
                     continue
+            
+
             ids.append(sample['id'])
 
             if sample["id"] in label and label[sample["id"]] == "null":
-                weights.append(4.0)
+                weights.append(2.0)
             else:
                 weights.append(1.0)
             
@@ -81,6 +84,12 @@ class T5Dataset(Dataset):
 
             # label
             if not self.is_test:
+                if answerable_or_not_binary:
+                    if sample["id"] in label and label[sample["id"]] == "null":
+                        labels.append("null")
+                    else:
+                        labels.append("answerable")
+
                 labels.append(label[sample["id"]])
 
         self.ids = ids
@@ -127,8 +136,19 @@ class T5Dataset(Dataset):
         
         if append_schema_info:
             if self.db_json:
-                tables_json = [db for db in self.db_json if db["db_id"] == self.db_id][0]
+                # tables_json = [db for db in self.db_json if db["db_id"] == self.db_id][0]
+                tables_json = self.db_json[0]
                 schema_description = self.get_schema_description(tables_json)
+                # schema_description = schema_description.replace(" , ", " ").split()
+                # for i, word in enumerate(schema_description):
+                #     if word == "[sep]":
+                #         schema_description[i] = "[SEP]"
+                #     elif word == "[SEP]":
+                #         continue
+                #     else:
+                #         # schema_description[i] = f'"{word}"'
+                #         pass
+                # schema_description = " , ".join(schema_description)
                 question += f"\nSchema: {schema_description}"
             return question
         else:
@@ -153,7 +173,7 @@ class T5Dataset(Dataset):
             if shuffle_schema:
                 self.random.shuffle(table_columns)
             column_desc = " , ".join(table_columns)
-            schema_description.append(f"{table_name.lower()} : {column_desc}")
+            schema_description.append(f"{table_name.lower()} {column_desc}")
 
         return " [SEP] ".join(schema_description)
 
