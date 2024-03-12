@@ -1,0 +1,20 @@
+
+"patients" "row_id" int  primary key, "subject_id" int, "gender" varchar, "dob" timestamp , "dod" timestamp, foreign_key:  primary key: "row_id"
+[SEP]
+"admissions" "row_id" int  primary key, "subject_id" int , "hadm_id" int, "admittime" timestamp , "dischtime" timestamp, "admission_type" varchar , "admission_location" varchar , "discharge_location" varchar, "insurance" varchar , "language" varchar, "marital_status" varchar, "age" int , foreign_key: "subject_id" int from "patients" "subject_id", primary key: "row_id"
+[SEP]
+"d_icd_diagnoses" "row_id" int  primary key, "icd_code" varchar, "long_title" varchar , foreign_key:  primary key: "row_id"
+[SEP]
+"d_icd_procedures" "row_id" int  primary key, "icd_code" varchar, "long_title" varchar , foreign_key:  primary key: "row_id"
+[SEP]
+"d_labitems" "row_id" int  primary key, "itemid" int, "label" varchar, foreign_key:  primary key: "row_id"
+[SEP]
+"d_items" "row_id" int  primary key, "itemid" int, "label" varchar , "abbreviation" varchar , "linksto" varchar , foreign_key:  primary key: "row_id"
+[SEP]
+"diagnoses_icd" "row_id" int  primary key, "subject_id" int , "hadm_id" int , "icd_code" varchar , "charttime" timestamp , foreign_key: "hadm_id" int from "admissions" "hadm_id", "icd_code" varchar from "d_icd_diagnoses" "icd_code", primary key: "row_id"
+[SEP]
+"procedures_icd" "row_id" int  primary key, "subject_id" int , "hadm_id" int , "icd_code" varchar , "charttime" timestamp , foreign_key: "hadm_id" int from "admissions" "hadm_id", "icd_code" varchar from "d_icd_procedures" "icd_code", primary key: "row_id"
+[SEP]
+"labevents" "row_id" int  primary key, "subject_id" int , "hadm_id" int , "itemid" int , "charttime" timestamp, "valuenum" double precision, "valueuom" varchar, foreign_key: "hadm_id" int from "admissions" "hadm_id", "itemid" int from "d_labitems" "itemid", primary key: "row_id"
+[SEP]
+"prescriptions" "row_id" int  primary key, "subject_id" int , "hadm_id" int , "starttime" timestamp , "stoptime" timestamp, "drug" varchar , "dose_val_rx" varchar , "dose_unit_rx" varchar , "route" varchar , foreign_key: "hadm_id" int from "admissions"
