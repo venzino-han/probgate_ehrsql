@@ -1,5 +1,6 @@
 import json
 import random
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 
@@ -26,14 +27,15 @@ class T5Dataset(Dataset):
         tokenizer,
         data_dir,
         is_test=False,
-        max_source_length=256, # natural langauge question
+        max_source_length=512, # natural langauge question
         max_target_length=512, # SQL
-        db_id='mimiciii', # NOTE: `mimic_iv` will be used for codabench
+        db_id='mimic_iv', # NOTE: `mimic_iv` will be used for codabench
         tables_file=None,
         exclude_unans=False, # exclude unanswerable questions b/c they have no valid sql.
         random_seed=0,
         append_schema_info=False,
-        answerable_or_not_binary=False,
+        answerable_or_not_binary=True,
+        null_sample_ratio=0.5,
     ):
 
         super().__init__()
@@ -53,6 +55,8 @@ class T5Dataset(Dataset):
             with open(f'{data_dir}/label.json') as json_file:
                 label = json.load(json_file)
 
+        self.schema_description = self.get_schema_description("schema.txt")
+
         self.db_json = None
         if tables_file:
             with open(tables_file) as f:
@@ -62,54 +66,47 @@ class T5Dataset(Dataset):
         ids = []
         questions = []
         labels = []
-        weights = []
+        
         for sample in data:
-
-            # id
-            if exclude_unans:
-                if sample["id"] in label and label[sample["id"]] == "null":
-                    continue
-            
-
-            ids.append(sample['id'])
-
-            if sample["id"] in label and label[sample["id"]] == "null":
-                weights.append(2.0)
-            else:
-                weights.append(1.0)
-            
-            # question
+            sample_id = sample["id"]
+            ids.append(sample_id)            
             question = self.preprocess_sample(sample, append_schema_info)
             questions.append(question)
 
-            # label
             if not self.is_test:
-                if answerable_or_not_binary:
-                    if sample["id"] in label and label[sample["id"]] == "null":
-                        labels.append("null")
-                    else:
-                        labels.append("answerable")
+                sample_label = label.get(sample_id, "null")
+                labels.append(sample_label)
 
-                labels.append(label[sample["id"]])
+        if exclude_unans:
+            questions = [q for q, l in zip(questions, labels) if l != "null"]
+            labels = [l for l in labels if l != "null"]
+            ids = [i for i, l in zip(ids, labels) if l != "null"]
 
-        self.ids = ids
         question_encoded = encode_file(tokenizer, questions, max_length=self.max_source_length)
         self.source_ids, self.source_mask = question_encoded['input_ids'], question_encoded['attention_mask']
-        if not self.is_test:
+        
+        if not self.is_test: # only for training, validation
+            if answerable_or_not_binary:
+                print("="*80)
+                print("binary classification mode.")
+                labels = ["answerable" if label != "null" else "null" for label in labels]
+            weights = []
+            # adjust sample weight 
+            original_null_sample_ratio = sum([1 for l in labels if l == "null"]) / len(labels)
+            print(f"null weigth : {null_sample_ratio / original_null_sample_ratio}")
+            if null_sample_ratio != original_null_sample_ratio:
+                weights = [1.0 if l != "null" else null_sample_ratio / original_null_sample_ratio for l in labels]
+                weights = np.array(weights)
+                weights = weights / weights.sum()
+
             label_encoded = encode_file(tokenizer, labels, max_length=self.max_target_length)
             self.target_ids = label_encoded['input_ids']
-
-            # TODO : check null case token
-            # higher probability of unanswerable questions
-            # self.null_token_id = self.tokenizer.convert_tokens_to_ids("null")
-            # self.weights = torch.ones(len(self.source_ids))
-            # self.weights[self.target_ids[:, 0] == self.null_token_id] = 2.0
-            # print null token ratio 
-            print(f"null token ratio: {sum(weights) / len(weights)}")
             self.weights = torch.tensor(weights)/sum(weights)
 
+        self.questions = questions
+        self.labels = labels
+        self.ids = ids
         
-
     def __len__(self):
         return len(self.source_ids)
 
@@ -135,47 +132,15 @@ class T5Dataset(Dataset):
         question = "Question: " + sample["question"]
         
         if append_schema_info:
-            if self.db_json:
-                # tables_json = [db for db in self.db_json if db["db_id"] == self.db_id][0]
-                tables_json = self.db_json[0]
-                schema_description = self.get_schema_description(tables_json)
-                # schema_description = schema_description.replace(" , ", " ").split()
-                # for i, word in enumerate(schema_description):
-                #     if word == "[sep]":
-                #         schema_description[i] = "[SEP]"
-                #     elif word == "[SEP]":
-                #         continue
-                #     else:
-                #         # schema_description[i] = f'"{word}"'
-                #         pass
-                # schema_description = " , ".join(schema_description)
-                question += f"\nSchema: {schema_description}"
+            question += f"\nSchema: {self.schema_description}"
             return question
         else:
             return question
 
-    def get_schema_description(self, tables_json, shuffle_schema=False):
-        """
-        Generates a textual description of the database schema.
-        """
-        table_names = tables_json["table_names_original"]
-        if shuffle_schema:
-            self.random.shuffle(table_names)
-
-        columns = [
-            (column_name[0], column_name[1].lower(), column_type.lower())
-            for column_name, column_type in zip(tables_json["column_names_original"], tables_json["column_types"])
-        ]
-
-        schema_description = [""]
-        for table_index, table_name in enumerate(table_names):
-            table_columns = [column[1] for column in columns if column[0] == table_index]
-            if shuffle_schema:
-                self.random.shuffle(table_columns)
-            column_desc = " , ".join(table_columns)
-            schema_description.append(f"{table_name.lower()} {column_desc}")
-
-        return " [SEP] ".join(schema_description)
+    def get_schema_description(self, schema_file_path):
+        with open(schema_file_path) as f:
+            schema = f.read().strip()
+        return schema
 
     def collate_fn(self, batch, return_tensors='pt', padding=True, truncation=True):
         """
