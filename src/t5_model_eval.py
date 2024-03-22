@@ -437,14 +437,14 @@ if __name__ == "__main__":
     --test_data_dir={NEW_TEST_DIR} \
     --tables_file={TABLES_PATH} \
     --train_epochs=10 \
-    --train_batch_size=8 \
+    --train_batch_size=12 \
     --gradient_accumulation_steps=1 \
     --learning_rate=1e-4 \
     --report_every_step=10 \
     --eval_every_step=10 \
     --bf16=1\
     --db_id=mimic_iv\
-    --max_target_length=512\
+    --max_target_length=256\
     """
     # --use_schema_info=1\
     # --binary_classification=1
@@ -541,6 +541,8 @@ if __name__ == "__main__":
     df = pd.DataFrame({'questions': questions, 'labels': labels})
     df.to_csv('questions_labels.csv', index=False)
 
+
+
     # Create DataLoader instances for batch processing
     from torch.utils.data import WeightedRandomSampler
     sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset))
@@ -560,23 +562,23 @@ if __name__ == "__main__":
         optimizer, scheduler = set_optim(model, train_loader, args)
 
 
-    # Start the training process
-    best_val_loss = train(
-        tokenizer=tokenizer,
-        model=model,
-        train_loader=train_loader,
-        valid_loader=valid_loader,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        step=step,
-        best_metric=best_metric,
-        args=args,
-    )
+    # # Start the training process
+    # best_val_loss = train(
+    #     tokenizer=tokenizer,
+    #     model=model,
+    #     train_loader=train_loader,
+    #     valid_loader=valid_loader,
+    #     optimizer=optimizer,
+    #     scheduler=scheduler,
+    #     step=step,
+    #     best_metric=best_metric,
+    #     args=args,
+    # )
 
     from scoring_program.scoring_utils import execute_all, reliability_score, penalize
     from scoring_program.postprocessing import post_process_sql
 
-    # best_val_loss = 0.0000
+    best_val_loss = 0.0091
 
     # Load the best-performing model checkpoint
     model, optimizer, scheduler, args, step, best_metric = load_model(

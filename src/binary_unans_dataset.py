@@ -4,8 +4,6 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from scoring_program.scoring_utils import execute_sql_wrapper
-from sql_utils import DB_PATH
 
 def encode_file(tokenizer, text, max_length, truncation=True, padding=True, return_tensors="pt"):
     """
@@ -36,7 +34,7 @@ class T5Dataset(Dataset):
         exclude_unans=False, # exclude unanswerable questions b/c they have no valid sql.
         random_seed=0,
         append_schema_info=False,
-        answerable_or_not_binary=False,
+        answerable_or_not_binary=True,
         null_sample_ratio=0.5,
     ):
 
@@ -84,8 +82,6 @@ class T5Dataset(Dataset):
             labels = [l for l in labels if l != "null"]
             ids = [i for i, l in zip(ids, labels) if l != "null"]
 
-        self.sql_result_labels = [ execute_sql_wrapper(0, label, DB_PATH, "real")[-1] for label in labels]
-        # print(self.sql_result_labels)[:10]
         question_encoded = encode_file(tokenizer, questions, max_length=self.max_source_length)
         self.source_ids, self.source_mask = question_encoded['input_ids'], question_encoded['attention_mask']
         
@@ -94,24 +90,22 @@ class T5Dataset(Dataset):
                 print("="*80)
                 print("binary classification mode.")
                 labels = ["answerable" if label != "null" else "null" for label in labels]
-            self.weights = torch.ones(len(labels))
+            weights = []
             # adjust sample weight 
-            # original_null_sample_ratio = sum([1 for l in labels if l == "null"]) / len(labels)
-            # print(f"null weigth : {null_sample_ratio / original_null_sample_ratio}")
-            # if null_sample_ratio != original_null_sample_ratio:
-            #     weights = [1.0 if l != "null" else null_sample_ratio / original_null_sample_ratio for l in labels]
-            #     weights = np.array(weights)
-            #     weights = weights / weights.sum()
+            original_null_sample_ratio = sum([1 for l in labels if l == "null"]) / len(labels)
+            print(f"null weigth : {null_sample_ratio / original_null_sample_ratio}")
+            if null_sample_ratio != original_null_sample_ratio:
+                weights = [1.0 if l != "null" else null_sample_ratio / original_null_sample_ratio for l in labels]
+                weights = np.array(weights)
+                weights = weights / weights.sum()
 
             label_encoded = encode_file(tokenizer, labels, max_length=self.max_target_length)
             self.target_ids = label_encoded['input_ids']
-            # self.weights = torch.tensor(weights)/sum(weights)
+            self.weights = torch.tensor(weights)/sum(weights)
 
         self.questions = questions
         self.labels = labels
         self.ids = ids
-
-        self.id_to_question = {i: q for i, q in zip(ids, questions)}
         
     def __len__(self):
         return len(self.source_ids)
@@ -121,15 +115,14 @@ class T5Dataset(Dataset):
             return {
                 "id": self.ids[index],
                 "source_ids": self.source_ids[index],
-                "source_mask": self.source_mask[index],
+                "source_mask": self.source_mask[index]
             }
         else:
             return {
                 "id": self.ids[index],
                 "source_ids": self.source_ids[index],
                 "source_mask": self.source_mask[index],
-                "target_ids": self.target_ids[index],
-                "sql_result_labels": self.sql_result_labels[index]
+                "target_ids": self.target_ids[index]
             }
 
     def preprocess_sample(self, sample, append_schema_info=False):
@@ -172,7 +165,6 @@ class T5Dataset(Dataset):
                 "source_ids": source_ids,
                 "source_mask": source_mask,
                 "target_ids": target_ids,
-                "sql_result_labels": [x["sql_result_labels"] for x in batch],
                 "id": ids,
             }
 
@@ -185,4 +177,3 @@ def trim_batch(input_ids, pad_token_id, attention_mask=None):
         return input_ids[:, keep_column_mask]
     else:
         return (input_ids[:, keep_column_mask], attention_mask[:, keep_column_mask])
-

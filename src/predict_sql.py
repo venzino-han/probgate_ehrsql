@@ -2,23 +2,6 @@ from transformers import T5Tokenizer
 from data_preprocess import NEW_TRAIN_DIR,  NEW_VALID_DIR,  NEW_TEST_DIR,  RESULT_DIR,  TABLES_PATH,  DB_ID, DB_PATH
 from dataset import T5Dataset
 
-tokenizer = T5Tokenizer.from_pretrained('t5-base')
-train_dataset = T5Dataset(
-    tokenizer=tokenizer,
-    data_dir=NEW_TRAIN_DIR,
-    tables_file=TABLES_PATH,
-    db_id=DB_ID,  # NOTE: `mimic_iv` will be used for codabench
-    append_schema_info=True, # use schema info
-)
-
-sample_idx = 1
-decoded_sample_src = tokenizer.decode(train_dataset[sample_idx]['source_ids'])
-decoded_sample_trg = tokenizer.decode(train_dataset[sample_idx]['target_ids'])
-print('\n')
-print(f"source ids: {decoded_sample_src}")
-print(f"target ids: {decoded_sample_trg}")
-
-
 import os
 import random
 import argparse
@@ -33,186 +16,209 @@ from torch.utils.data import Dataset, DataLoader
 from transformers import T5Tokenizer, T5ForConditionalGeneration, get_linear_schedule_with_warmup
 
 from t5_model_train import *
-
-best_val_loss = 0.0031
-
-
-# Define and parse command line arguments for model configuration
-# exp_name='t5-baseline'
-# model_name='t5-base'
-exp_name = "t5-text2sql"
-model_name = "gaussalgo/T5-LM-Large-text2sql-spider"
-ARGS_STR = f"""
---exp_name={exp_name} \
---model_name={model_name} \
---train_data_dir={NEW_TRAIN_DIR} \
---valid_data_dir={NEW_VALID_DIR} \
---test_data_dir={NEW_TEST_DIR} \
---tables_file={TABLES_PATH} \
---train_epochs=20 \
---train_batch_size=8 \
---gradient_accumulation_steps=1 \
---learning_rate=1e-3 \
---report_every_step=10 \
---eval_every_step=10 \
---bf16=1
-"""
-
-# Parse arguments
-parser = argparse.ArgumentParser()
-parser = add_default_args(parser)
-args = parser.parse_args(ARGS_STR.split())
-
-# Configure CUDA settings
-os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-
-# Set random seed for reproducibility
-set_seed(args)
-
-# Determine device for training and set model save path
-args.device = "cuda" if torch.cuda.is_available() else "cpu"
-args.n_gpu = torch.cuda.device_count()
-args.save_model_path = os.path.join(args.output_dir, args.exp_name)
-
-# Initialize T5 model and set device
-model = T5ForConditionalGeneration.from_pretrained(args.model_name)
-model = model.to(args.device)
-
-# Convert model to bfloat16 precision if required
-if args.bf16:
-    print("bfloat16 precision will be used")
-    model = model.to(torch.bfloat16)
-
-# Initialize tokenizer with additional SQL tokens
-add_tokens = ["<", "<=", "<>"]
-tokenizer = T5Tokenizer.from_pretrained(args.model_name)
-tokenizer.add_tokens(add_tokens)
-
-# Resize model token embeddings
-model.resize_token_embeddings(len(tokenizer))
-
-# Define parameters for dataset preparation
-dataset_kwargs = dict(
-    db_id=args.db_id,
-    max_source_length=args.max_source_length,
-    max_target_length=args.max_target_length,
-    tables_file=args.tables_file,
-)
-
-# Initialize datasets for different phases
-train_dataset = T5Dataset(tokenizer, args.train_data_dir, is_test=False, exclude_unans=False, **dataset_kwargs)
-valid_dataset = T5Dataset(tokenizer, args.valid_data_dir, is_test=False, exclude_unans=False, **dataset_kwargs)
-test_dataset = T5Dataset(tokenizer, args.test_data_dir, is_test=True, exclude_unans=False, **dataset_kwargs)
-
-print(f"Train dataset: {len(train_dataset)}")
-print(f"Valid dataset: {len(valid_dataset)}")
-print(f"Test dataset: {len(test_dataset)}")
-
-# Create DataLoader instances for batch processing
-from torch.utils.data import WeightedRandomSampler
-sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset))
-
-train_loader = DataLoader(train_dataset, batch_size=args.train_batch_size, collate_fn=train_dataset.collate_fn, 
-                        #   shuffle=True,
-                          sampler=sampler,
-                          )
-valid_loader = DataLoader(valid_dataset, batch_size=args.valid_batch_size, collate_fn=valid_dataset.collate_fn, shuffle=False)
-test_loader = DataLoader(test_dataset, batch_size=args.test_batch_size, collate_fn=test_dataset.collate_fn, shuffle=False)
-
-# Load existing model or initialize optimizer and scheduler
-if args.load_checkpoint_path:
-    model, optimizer, scheduler, args, step, best_metric = load_model(model, args.load_checkpoint_path, args, train_loader)
-else:
-    step, best_metric = 0, -1
-    optimizer, scheduler = set_optim(model, train_loader, args)
-
+from sql_utils import generate_sql
 
 from scoring_program.scoring_utils import execute_all, reliability_score, penalize
 from scoring_program.postprocessing import post_process_sql
 
-# Load the best-performing model checkpoint
-model, optimizer, scheduler, args, step, best_metric = load_model(
-    model,
-    os.path.join(args.save_model_path, f'checkpoint_best_{best_val_loss:.4f}.pth.tar'),
-    args,
-    train_loader,
-)
 
-# Perform inference on the validation set
-valid_eval = generate_sql(tokenizer, model, valid_loader, args)
+def get_sql_correctness(dataloader, model, tokenizer, args, test=False):
+    generated_sqls = generate_sql(tokenizer, model, dataloader, args)
+    id2pred_sql = {sample['id']: post_process_sql(sample['pred']) for sample in generated_sqls}
+    
+    pred_result = execute_all(id2pred_sql, db_path=DB_PATH, tag='pred')
+    
+    # count error in pred_result and real_result
+    error_count = 0
+    for key, val in pred_result.items():
+        if type(val)==str:
+            if val.startswith('error'):
+              error_count += 1
+    print(f"pred error_count: {error_count}")
 
-# Post-process SQL queries for evaluation
-label = {sample['id']: post_process_sql(sample['real']) for sample in valid_eval}
-label_y = {sample['id']: post_process_sql(sample['pred']) for sample in valid_eval}
-id2maxent = {sample['id']: max(sample['entropy']) for sample in valid_eval}  # NOTE: Abstain strategy not used here
+    if not test:
+        id2real_sql = {sample['id']: post_process_sql(sample['real']) for sample in generated_sqls}
+        real_result = execute_all(id2real_sql, db_path=DB_PATH, tag='real')
+    
+        error_count = 0
+        for key, val in real_result.items():
+            if type(val)==str:
+                if val.startswith('error'):
+                    error_count += 1
+        print(f"real error_count: {error_count}")
+        correctness = [1 if pred_result[id_] == real_result[id_] else 0 for id_ in pred_result]
+    else:
+        correctness = [0 for id_ in pred_result]
 
-# Calculate the Reliability Score (RS) across all queries
-real_dict = {id_: post_process_sql(label[id_]) for id_ in label}
-pred_dict = {id_: post_process_sql(label_y[id_]) for id_ in label_y}
-assert set(real_dict) == set(pred_dict), "IDs do not match"
+    generated_sqls = [ id2pred_sql[id_] for id_ in pred_result]
+    ids = [id_ for id_ in pred_result]
 
-real_result = execute_all(real_dict, db_path=DB_PATH, tag='real')
-pred_result = execute_all(pred_dict, db_path=DB_PATH, tag='pred')
+    return ids, correctness, generated_sqls
 
-scores, score_dict = reliability_score(real_result, pred_result, return_dict=True)
-accuracy0 = penalize(scores, penalty=0)
-accuracy5 = penalize(scores, penalty=5)
-accuracy10 = penalize(scores, penalty=10)
-accuracyN = penalize(scores, penalty=len(scores))
+if __name__ == "__main__":
+    for best_val_loss in [
+        # 0.0114,
+        # 0.0101,
+        # 0.0045,
+        0.0031,
+        # 0.0003,
+        ]:
 
-print(f"RS Scores: RS0: {accuracy0:.3f}, RS5: {accuracy5:.3f}, RS10: {accuracy10:.3f}, RSN: {accuracyN:.3f}")
+        exp_name = "t5-text2sql"
+        model_name = "gaussalgo/T5-LM-Large-text2sql-spider"
+        # model_name = "sangryul/Flan-T5-XL-text2sql-spider"
+        ARGS_STR = f"""
+        --exp_name={exp_name} \
+        --model_name={model_name} \
+        --train_data_dir={NEW_TRAIN_DIR} \
+        --valid_data_dir={NEW_VALID_DIR} \
+        --test_data_dir={NEW_TEST_DIR} \
+        --tables_file={TABLES_PATH} \
+        --train_epochs=20 \
+        --train_batch_size=32 \
+        --valid_batch_size=32 \
+        --test_batch_size=32 \
+        --gradient_accumulation_steps=1 \
+        --bf16=1\
+        --use_schema_info=1\
+        --db_id=mimic_iv\
+        --max_target_length=512\
+        """
 
-# Calculate threshold for filtering unanswerable queries
-threshold = get_threshold(id2maxent, score_dict)
-print(f"Threshold for filtering: {threshold}")
+        # Parse arguments
+        parser = argparse.ArgumentParser()
+        parser = add_default_args(parser)
+        args = parser.parse_args(ARGS_STR.split())
 
-# Apply threshold to filter out uncertain predictions
-val_label_y = {sample['id']: 'null' if threshold < max(sample['entropy']) else post_process_sql(sample['pred']) for sample in valid_eval}
+        # Configure CUDA settings
+        os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+        os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
-# Recalculate RS with filtered predictions
-real_dict = {id_: post_process_sql(label[id_]) for id_ in label}
-pred_dict = {id_: post_process_sql(val_label_y[id_]) for id_ in val_label_y}
+        # Set random seed for reproducibility
+        set_seed(args)
 
-scores_filtered = reliability_score(real_dict, pred_dict)
+        # Determine device for training and set model save path
+        args.device = "cuda" if torch.cuda.is_available() else "cpu"
+        args.n_gpu = torch.cuda.device_count()
+        args.save_model_path = os.path.join(args.output_dir, args.exp_name)
 
-accuracy0_filtered = penalize(scores_filtered, penalty=0)
-accuracy5_filtered = penalize(scores_filtered, penalty=5)
-accuracy10_filtered = penalize(scores_filtered, penalty=10)
-accuracyN_filtered = penalize(scores_filtered, penalty=len(scores))
+        # Initialize T5 model and set device
+        model = T5ForConditionalGeneration.from_pretrained(args.model_name)
+        model = model.to(args.device)
 
-# Output the refined RS scores with abstention
-# filter unanswerable queries
-print(f"RS Score with filtered: RS0: {accuracy0_filtered:.3f}, RS5: {accuracy5_filtered:.3f}, RS10: {accuracy10_filtered:.3f}, RSN: {accuracyN_filtered:.3f}")
+        # Convert model to bfloat16 precision if required
+        if args.bf16:
+            print("bfloat16 precision will be used")
+            model = model.to(torch.bfloat16)
+        # load custom tokens
+        with open('schema_tokens.txt', 'r') as f:
+            custom_tokens = f.read().split('\n')
+        # Initialize tokenizer with additional SQL tokens
+        add_tokens = ["<", "<=", "<>"] #+ custom_tokens
 
-# Conduct inference on the test set (For now, we use original validation set as test data)
-test_eval = generate_sql(tokenizer, model, test_loader, args)
+        tokenizer = T5Tokenizer.from_pretrained(args.model_name)
+        tokenizer.add_tokens(add_tokens)
 
-# Apply the threshold to uncertain predictions
-label_y = {sample['id']: 'null' if threshold < max(sample['entropy']) else post_process_sql(sample['pred']) for sample in test_eval}
+        # Resize model token embeddings
+        model.resize_token_embeddings(len(tokenizer))
+
+        # Define parameters for dataset preparation
+        dataset_kwargs = dict(
+            db_id=args.db_id,
+            max_source_length=args.max_source_length,
+            max_target_length=args.max_target_length,
+            tables_file=args.tables_file,
+        )
+
+        # Initialize datasets for different phases
+        train_dataset = T5Dataset(tokenizer, args.train_data_dir, is_test=False, exclude_unans=False, **dataset_kwargs)
+        valid_dataset = T5Dataset(tokenizer, args.valid_data_dir, is_test=False, exclude_unans=False, **dataset_kwargs)
+        test_dataset = T5Dataset(tokenizer, args.test_data_dir, is_test=True, exclude_unans=False, **dataset_kwargs)
+
+        print(f"Train dataset: {len(train_dataset)}")
+        print(f"Valid dataset: {len(valid_dataset)}")
+        print(f"Test dataset: {len(test_dataset)}")
+
+        # Create DataLoader instances for batch processing
+        from torch.utils.data import WeightedRandomSampler
+        sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset))
+
+        train_loader = DataLoader(train_dataset, batch_size=args.train_batch_size, collate_fn=train_dataset.collate_fn, 
+                                #   shuffle=True,
+                                sampler=sampler,
+                                )
+        valid_loader = DataLoader(valid_dataset, batch_size=args.valid_batch_size, collate_fn=valid_dataset.collate_fn, shuffle=False)
+        test_loader = DataLoader(test_dataset, batch_size=args.test_batch_size, collate_fn=test_dataset.collate_fn, shuffle=False)
+
+        # Load existing model or initialize optimizer and scheduler
+        if args.load_checkpoint_path:
+            model, optimizer, scheduler, args, step, best_metric = load_model(model, args.load_checkpoint_path, args, train_loader)
+        else:
+            step, best_metric = 0, -1
+            optimizer, scheduler = set_optim(model, train_loader, args)
 
 
-import locale; locale.getpreferredencoding = lambda: "UTF-8" # if necessary
-from utils.data_io import write_json as write_label
+        # Load the best-performing model checkpoint
 
-# Save the filtered predictions to a JSON file
-os.makedirs(RESULT_DIR, exist_ok=True)
-SCORING_OUTPUT_DIR = os.path.join(RESULT_DIR, 'prediction.json')
-write_label(SCORING_OUTPUT_DIR, label_y)
+        model, _, _, args, step, best_metric = load_model(
+            model,
+            os.path.join(args.save_model_path, f'checkpoint_best_{best_val_loss:.4f}.pth.tar'),
+            args,
+            train_loader,
+        )
 
-# Verify the file creation
-print("Listing files in RESULT_DIR:")
-print(os.listdir(RESULT_DIR))
-"""
-# Change to the directory containing the prediction file
-%cd {RESULT_DIR}
-# Compress the prediction.json file into a ZIP archive
-!zip predictions.zip prediction.json
-"""
+        print("Start SQL generation and validation")
+        model_name = args.model_name.replace("/", "_")
+        
+        # val_ids, val_correctness, val_generated_sqls = get_sql_correctness(valid_loader, model, tokenizer, args)
+        # val_questions = [valid_dataset.id_to_question[id_] for id_ in val_ids]
+        
+        # print(len(val_ids), len(val_questions), len(val_correctness), len(val_generated_sqls))
 
-# zip the prediction file
-import zipfile
-with zipfile.ZipFile(os.path.join(RESULT_DIR, f'predictions_{exp_name}_{best_val_loss:.4f}.zip'), 'w') as z:
-    z.write(SCORING_OUTPUT_DIR, arcname='prediction.json')
+        # val_question_sql_correctness_df = pd.DataFrame({
+        #     'id': val_ids, # 'id' is the key in the scoring program
+        #     'question': val_questions,
+        #     'correctness': val_correctness,
+        #     'generated_sql': val_generated_sqls,
+        # })
+        # val_question_sql_correctness_df.to_csv(f'./sql_validations/val_qsc_{model_name}_{best_val_loss:.4f}.csv', index=False)
+
+        # train_ids, train_correctness, train_generated_sqls = get_sql_correctness(train_loader, model, tokenizer, args)
+        # train_questions = [train_dataset.id_to_question[id_] for id_ in train_ids]
+
+        # print(f"""
+        #     train_ids, {len(train_ids)}, 
+        #     train_questions, {len(train_questions)}, 
+        #     train_correctness, {len(train_correctness)}, 
+        #     train_generated_sqls, {len(train_generated_sqls)}
+        # """
+        # )
+
+        # train_question_sql_correctness_df = pd.DataFrame({
+        #     'id': train_ids, # 'id' is the key in the scoring program
+        #     'question': train_questions,
+        #     'correctness': train_correctness,
+        #     'generated_sql': train_generated_sqls,
+        # })
+        # train_question_sql_correctness_df.to_csv(f'./sql_validations/train_qsc_{model_name}_{best_val_loss:.4f}.csv', index=False)
+
+        test_ids, test_correctness, test_generated_sqls = get_sql_correctness(test_loader, model, tokenizer, args, test=True)
+        test_questions = [test_dataset.id_to_question[id_] for id_ in test_ids]
+
+        print(f"""
+            test_ids, {len(test_ids)},
+            test_questions, {len(test_questions)},
+            test_correctness, {len(test_correctness)},
+            test_generated_sqls, {len(test_generated_sqls)}
+        """
+        )
+
+        test_question_sql_correctness_df = pd.DataFrame({
+            'id': test_ids, # 'id' is the key in the scoring program
+            'question': test_questions,
+            'correctness': test_correctness,
+            'generated_sql': test_generated_sqls,
+        })
+        test_question_sql_correctness_df.to_csv(f'./sql_validations/test_qsc_{model_name}_{best_val_loss:.4f}.csv', index=False)
 
 
