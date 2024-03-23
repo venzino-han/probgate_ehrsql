@@ -43,10 +43,16 @@ def train(tokenizer, model, train_loader, optimizer, step=0, valid_loader=None, 
             labels = batch["y"].to(args.device)
 
             # Forward pass and calculate loss
-            loss = model(input_ids=source_ids, attention_mask=attention_mask, labels=labels)[0]
+            output = model(input_ids=source_ids, attention_mask=attention_mask, labels=labels, return_dict=True)
 
-            # Normalize loss to account for gradient accumulation
-            loss = torch.mean(loss) / args.gradient_accumulation_steps
+            # loss = output.loss
+            pred = output.logits.squeeze(-1)
+            # if pred=1 and y=0, 10 times more important
+            # if pred=0 and y=1, 1 times more important
+            weights = torch.ones_like(pred, dtype=torch.bfloat16).to(args.device)
+            weights[(pred > 0.5) & (labels < 0.5)] *= 10.4
+
+            loss = torch.nn.BCEWithLogitsLoss(pos_weight=weights)(pred, labels)
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
