@@ -95,7 +95,7 @@ class T5Dataset(Dataset):
         exclude_unans=False, # exclude unanswerable questions b/c they have no valid sql.
         random_seed=0,
         append_schema_info=False,
-        answerable_or_not_binary=False,
+        binary_classification=False,
         null_sample_ratio=0.3,
     ):
 
@@ -155,10 +155,6 @@ class T5Dataset(Dataset):
         self.source_ids, self.source_mask = question_encoded['input_ids'], question_encoded['attention_mask']
         
         if not self.is_test: # only for training, validation
-            if answerable_or_not_binary:
-                print("="*80)
-                print("binary classification mode.")
-                labels = ["answerable" if label != "null" else "null" for label in labels]
             self.weights = torch.ones(len(labels))
             # adjust sample weight 
             original_null_sample_ratio = sum([1 for l in labels if l == "null"]) / len(labels)
@@ -168,9 +164,15 @@ class T5Dataset(Dataset):
                 weights = np.array(weights)
                 weights = weights / weights.sum()
             self.weights = torch.tensor(weights)/sum(weights)
-
             label_encoded = encode_file(tokenizer, labels, max_length=self.max_target_length)
             self.target_ids = label_encoded['input_ids']
+
+            if binary_classification:
+                print("="*80)
+                print("binary classification mode.")
+                labels = [1 if label != "null" else 0 for label in labels]
+                self.y = torch.tensor(labels).to(torch.bfloat16)
+                
 
         self.questions = questions
         self.labels = labels
@@ -194,7 +196,8 @@ class T5Dataset(Dataset):
                 "source_ids": self.source_ids[index],
                 "source_mask": self.source_mask[index],
                 "target_ids": self.target_ids[index],
-                "sql_result_labels": self.sql_result_labels[index]
+                "sql_result_labels": self.sql_result_labels[index],
+                "y": self.y[index],
             }
 
     def preprocess_sample(self, key, sample, append_schema_info=False):
@@ -265,6 +268,7 @@ class T5Dataset(Dataset):
                 "target_ids": target_ids,
                 "sql_result_labels": [x["sql_result_labels"] for x in batch],
                 "id": ids,
+                "y": torch.stack([x["y"] for x in batch]),
             }
 
 def trim_batch(input_ids, pad_token_id, attention_mask=None):
