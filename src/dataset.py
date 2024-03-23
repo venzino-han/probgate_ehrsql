@@ -7,6 +7,8 @@ from torch.utils.data import Dataset
 from scoring_program.scoring_utils import execute_sql_wrapper
 from sql_utils import DB_PATH
 
+
+
 def encode_file(tokenizer, text, max_length, truncation=True, padding=True, return_tensors="pt"):
     """
     Tokenizes the text and returns tensors.
@@ -18,6 +20,63 @@ def encode_file(tokenizer, text, max_length, truncation=True, padding=True, retu
         padding=padding,
         return_tensors=return_tensors,
     )
+
+
+class MultiLabelSBERT(torch.nn.Module):
+    def __init__(self,):
+        super(MultiLabelSBERT, self).__init__()
+        self.linear1 = torch.nn.Linear(768, 64)
+        self.linear2 = torch.nn.Linear(64, 7)
+        self.droptout = torch.nn.Dropout(0.1)
+        self.leakyrelu = torch.nn.LeakyReLU()
+        self.sigmoid = torch.nn.Sigmoid()
+
+    def forward(self, x):
+        x = self.linear1(x)
+        x = self.droptout(x)
+        x = self.linear2(x)
+        return x
+
+from sentence_transformers import SentenceTransformer
+
+TABLE_NAME_2_TABLE_ID={
+        'patients': 0,
+        'admissions': 1,
+        'd_icd_diagnoses': 2,
+        'd_icd_procedures': 3,
+        'd_labitems': 4,
+        'd_items': 5,
+        'diagnoses_icd': 6,
+        'procedures_icd': 7,
+        'labevents': 8,
+        'prescriptions': 9
+ }
+
+def generate_table_vectors_from_questions(questions, device='cuda:0'):
+    sbert = SentenceTransformer('bert-base-nli-mean-tokens').to(device)
+    table_predict_model = MultiLabelSBERT().to(device)
+    table_predict_model.load_state_dict(torch.load('best_model_0.018.pth'))
+    sbert_embeddings = sbert.encode(questions)
+
+    table_vectors = []
+    for emb in sbert_embeddings:
+        table_vector = table_predict_model(emb.to(device))
+        table_vectors.append(table_vector.cpu().detach())
+    table_vectors = torch.stack(table_vectors)
+    return table_vectors.numpy()
+
+def get_schema_from_table_vectors(table_vectors, schema_dict):
+    schema_texts = []
+    for i in range(table_vectors.shape[0]):
+        schema_text = 'Schema:\n'
+        for j in range(table_vectors.shape[1]):
+            if table_vectors[i][j] > 0.5:
+                schema_text += schema_dict[j] + '\n'
+        schema_texts.append(schema_text)
+
+    return schema_texts
+
+
 
 
 class T5Dataset(Dataset):
@@ -57,7 +116,13 @@ class T5Dataset(Dataset):
             with open(f'{data_dir}/label.json') as json_file:
                 label = json.load(json_file)
 
-        self.schema_description = self.get_schema_description("schema.txt")
+        self.schema_description = self._get_schema_description_from_file("schema.txt")
+
+        split = 'train' if 'train' in data_dir else 'valid'
+        if is_test:
+            split = 'test'
+        with open(f"{split}_schema_dict.json") as f:
+            self.schema_dict = json.load(f)
 
         self.db_json = None
         if tables_file:
@@ -72,7 +137,7 @@ class T5Dataset(Dataset):
         for sample in data:
             sample_id = sample["id"]
             ids.append(sample_id)            
-            question = self.preprocess_sample(sample, append_schema_info)
+            question = self.preprocess_sample(sample_id, sample, append_schema_info)
             questions.append(question)
 
             if not self.is_test:
@@ -132,22 +197,48 @@ class T5Dataset(Dataset):
                 "sql_result_labels": self.sql_result_labels[index]
             }
 
-    def preprocess_sample(self, sample, append_schema_info=False):
+    def preprocess_sample(self, key, sample, append_schema_info=False):
         """
         Processes a single data sample, adding schema description to the question.
         """
         question = "Question: " + sample["question"]
         
         if append_schema_info:
-            question += f"\nSchema: {self.schema_description}"
+            # question += f"\nSchema: {self.schema_description}"
+            question += f"\n{self.schema_dict.get(key, '')}"
             return question
         else:
             return question
 
-    def get_schema_description(self, schema_file_path):
+    def _get_schema_description_from_file(self, schema_file_path):
         with open(schema_file_path) as f:
             schema = f.read().strip()
         return schema
+    
+
+    def _get_schema_description(self, tables_json, shuffle_schema=False):
+        """
+        Generates a textual description of the database schema.
+        """
+        table_names = tables_json["table_names_original"]
+        if shuffle_schema:
+            self.random.shuffle(table_names)
+
+        columns = [
+            (column_name[0], column_name[1].lower(), column_type.lower())
+            for column_name, column_type in zip(tables_json["column_names_original"], tables_json["column_types"])
+        ]
+
+        schema_description = [""]
+        for table_index, table_name in enumerate(table_names):
+            table_columns = [column[1] for column in columns if column[0] == table_index]
+            if shuffle_schema:
+                self.random.shuffle(table_columns)
+            column_desc = " , ".join(table_columns)
+            schema_description.append(f"{table_name.lower()} : {column_desc}")
+
+        return " | ".join(schema_description)
+
 
     def collate_fn(self, batch, return_tensors='pt', padding=True, truncation=True):
         """
