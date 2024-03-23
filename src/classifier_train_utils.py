@@ -91,8 +91,15 @@ def train(tokenizer, model, train_loader, optimizer, step=0, valid_loader=None, 
                 mask = batch["source_mask"].to(args.device)
                 labels = batch["y"].to(args.device)
 
-                valid_loss = model(input_ids=ids, attention_mask=mask, labels=labels)[0]
-                valid_loss_list.append(valid_loss.item())
+                output = model(input_ids=ids, attention_mask=mask, labels=labels)
+                pred = output.logits.squeeze(-1)
+                # if pred=1 and y=0, 10 times more important
+                # if pred=0 and y=1, 1 times more important
+                weights = torch.ones_like(pred, dtype=torch.bfloat16).to(args.device)
+                weights[(pred > 0.5) & (labels < 0.5)] *= 10.4
+
+                loss = weighted_mse_loss(pred, labels, weights).mean()
+                valid_loss_list.append(loss.item())
 
             # Calculate average validation loss
             valid_loss = sum(valid_loss_list) / len(valid_loss_list)
