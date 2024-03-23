@@ -96,7 +96,7 @@ class T5Dataset(Dataset):
         random_seed=0,
         append_schema_info=False,
         answerable_or_not_binary=False,
-        null_sample_ratio=0.5,
+        null_sample_ratio=0.3,
     ):
 
         super().__init__()
@@ -161,16 +161,16 @@ class T5Dataset(Dataset):
                 labels = ["answerable" if label != "null" else "null" for label in labels]
             self.weights = torch.ones(len(labels))
             # adjust sample weight 
-            # original_null_sample_ratio = sum([1 for l in labels if l == "null"]) / len(labels)
-            # print(f"null weigth : {null_sample_ratio / original_null_sample_ratio}")
-            # if null_sample_ratio != original_null_sample_ratio:
-            #     weights = [1.0 if l != "null" else null_sample_ratio / original_null_sample_ratio for l in labels]
-            #     weights = np.array(weights)
-            #     weights = weights / weights.sum()
+            original_null_sample_ratio = sum([1 for l in labels if l == "null"]) / len(labels)
+            print(f"null weigth : {null_sample_ratio / original_null_sample_ratio}")
+            if null_sample_ratio != original_null_sample_ratio:
+                weights = [1.0 if l != "null" else null_sample_ratio / original_null_sample_ratio for l in labels]
+                weights = np.array(weights)
+                weights = weights / weights.sum()
+            self.weights = torch.tensor(weights)/sum(weights)
 
             label_encoded = encode_file(tokenizer, labels, max_length=self.max_target_length)
             self.target_ids = label_encoded['input_ids']
-            # self.weights = torch.tensor(weights)/sum(weights)
 
         self.questions = questions
         self.labels = labels

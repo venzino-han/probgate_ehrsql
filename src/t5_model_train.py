@@ -13,16 +13,57 @@ from tqdm import tqdm
 
 import torch
 from torch.utils.data import Dataset, DataLoader
-from transformers import T5Tokenizer, T5ForConditionalGeneration, get_linear_schedule_with_warmup
+from transformers import AutoTokenizer, AutoModel, T5Tokenizer, T5ForConditionalGeneration, get_linear_schedule_with_warmup
 
 from train_utils import get_default_args, set_seed, set_optim, load_model, train, generate_sql, get_threshold
+
+TRAIN_BATCH_SIZE = 8
+VAL_BATCH_SIZE = 16
+TEST_BATCH_SIZE = 16
+
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+exp_name = "text2sql"
+model_name = "gaussalgo/T5-LM-Large-text2sql-spider"
+TRAIN_BATCH_SIZE = 8
+VAL_BATCH_SIZE = 16
+TEST_BATCH_SIZE = 16
+NULL_SAMPLE_RATIO = 0.1
+USE_SCHEMA = 0
+best_val_loss = 0.0530
+RUN_TRAIN = False
+
+# model_name = "sangryul/Flan-T5-XL-text2sql-spider"
+# model_name = "./flan-t5-xl-extended-schema"
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+exp_name = "flan-t5-small"
+model_name = "google/flan-t5-small"
+TRAIN_BATCH_SIZE = 16
+VAL_BATCH_SIZE = 16
+TEST_BATCH_SIZE = 16
+NULL_SAMPLE_RATIO = 0.1
+USE_SCHEMA = 0
+best_val_loss = 0.9524
+RUN_TRAIN = False
+
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+exp_name = "flan-t5-small_null30_schema"
+model_name = "google/flan-t5-small"
+TRAIN_BATCH_SIZE = 32
+VAL_BATCH_SIZE = 64
+TEST_BATCH_SIZE = 64
+NULL_SAMPLE_RATIO = 0.3
+USE_SCHEMA = 1
+best_val_loss = 1.0391
+RUN_TRAIN = True
+
+ADD_CUSTOM_TOKENS = True
 
 # --exclude_unans=1
 if __name__ == "__main__":
 
-    exp_name = "t5_text2sql_schema"
-    model_name = "gaussalgo/T5-LM-Large-text2sql-spider"
-    # model_name = "sangryul/Flan-T5-XL-text2sql-spider"
     ARGS_STR = f"""
     --exp_name={exp_name} \
     --model_name={model_name} \
@@ -30,17 +71,17 @@ if __name__ == "__main__":
     --valid_data_dir={NEW_VALID_DIR} \
     --test_data_dir={NEW_TEST_DIR} \
     --tables_file={TABLES_PATH} \
-    --train_epochs=20 \
-    --train_batch_size=4 \
-    --valid_batch_size=8 \
-    --test_batch_size=8 \
+    --train_epochs=50 \
+    --train_batch_size={TRAIN_BATCH_SIZE} \
+    --valid_batch_size={VAL_BATCH_SIZE} \
+    --test_batch_size={TEST_BATCH_SIZE} \
     --gradient_accumulation_steps=1 \
     --learning_rate=1e-4 \
     --report_every_step=10 \
     --eval_every_step=10 \
     --bf16=1\
     --db_id=mimic_iv\
-    --use_schema_info=1\
+    --use_schema_info={USE_SCHEMA}\
     --max_target_length=512\
     """
     # --binary_classification=1
@@ -54,8 +95,6 @@ if __name__ == "__main__":
     args = parser.parse_args(ARGS_STR.split())
 
     # Configure CUDA settings
-    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
     # Set random seed for reproducibility
     set_seed(args)
@@ -75,6 +114,7 @@ if __name__ == "__main__":
 
     # Initialize T5 model and set device
     model = T5ForConditionalGeneration.from_pretrained(args.model_name)
+    # model = AutoModel.from_pretrained(args.model_name)
     model = model.to(args.device)
 
     # Convert model to bfloat16 precision if required
@@ -87,9 +127,12 @@ if __name__ == "__main__":
         custom_tokens = f.read().split('\n')
 
     # Initialize tokenizer with additional SQL tokens
-    add_tokens = ["<", "<=", "<>"] + custom_tokens
     tokenizer = T5Tokenizer.from_pretrained(args.model_name)
-    tokenizer.add_tokens(add_tokens)
+    # tokenizer = AutoTokenizer.from_pretrained(args.model_name)
+    add_tokens = ["<", "<=", "<>"] + custom_tokens
+    add_tokens = custom_tokens
+    if ADD_CUSTOM_TOKENS:
+        tokenizer.add_tokens(add_tokens)
 
     # Resize model token embeddings
     model.resize_token_embeddings(len(tokenizer))
@@ -107,7 +150,13 @@ if __name__ == "__main__":
     print(dataset_kwargs)
 
     # Initialize datasets for different phases
-    train_dataset = T5Dataset(tokenizer, args.train_data_dir, is_test=False, exclude_unans=args.exclude_unans, **dataset_kwargs)
+    train_dataset = T5Dataset(
+        tokenizer, 
+        args.train_data_dir, 
+        is_test=False, 
+        exclude_unans=args.exclude_unans, 
+        null_sample_ratio=NULL_SAMPLE_RATIO,
+        **dataset_kwargs)
     valid_dataset = T5Dataset(tokenizer, args.valid_data_dir, is_test=False, exclude_unans=False, **dataset_kwargs)
     # valid_dataset_exclude_unans = T5Dataset(tokenizer, args.valid_data_dir, is_test=False, exclude_unans=True, **dataset_kwargs)
     test_dataset = T5Dataset(tokenizer, args.test_data_dir, is_test=True, exclude_unans=False, **dataset_kwargs)
@@ -141,8 +190,8 @@ if __name__ == "__main__":
     sampler = WeightedRandomSampler(train_dataset.weights, len(train_dataset))
 
     train_loader = DataLoader(train_dataset, batch_size=args.train_batch_size, collate_fn=train_dataset.collate_fn, 
-                              shuffle=True,
-                            # sampler=sampler,
+                            #   shuffle=True,
+                            sampler=sampler,
                             )
     valid_loader = DataLoader(valid_dataset, batch_size=args.valid_batch_size, collate_fn=valid_dataset.collate_fn, shuffle=False)
     test_loader = DataLoader(test_dataset, batch_size=args.test_batch_size, collate_fn=test_dataset.collate_fn, shuffle=False)
@@ -155,18 +204,6 @@ if __name__ == "__main__":
         optimizer, scheduler = set_optim(model, train_loader, args)
 
 
-    # Start the training process
-    best_val_loss = train(
-        tokenizer=tokenizer,
-        model=model,
-        train_loader=train_loader,
-        valid_loader=valid_loader,
-        optimizer=optimizer,
-        scheduler=scheduler,
-        step=step,
-        best_metric=best_metric,
-        args=args,
-    )
 
     from scoring_program.scoring_utils import execute_all, reliability_score, penalize
     from scoring_program.postprocessing import post_process_sql
@@ -180,6 +217,20 @@ if __name__ == "__main__":
         args,
         train_loader,
     )
+
+    # Start the training process
+    if RUN_TRAIN:
+        best_val_loss = train(
+            tokenizer=tokenizer,
+            model=model,
+            train_loader=train_loader,
+            valid_loader=valid_loader,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            step=step,
+            best_metric=best_metric,
+            args=args,
+        )
 
     # Perform inference on the validation set
     # valid_eval = generate_sql(tokenizer, model, valid_loader, args)
@@ -215,7 +266,7 @@ if __name__ == "__main__":
     real_result = execute_all(real_dict, db_path=DB_PATH, tag='real')
     pred_result = execute_all(pred_dict, db_path=DB_PATH, tag='pred')
 
-    scores, score_dict = reliability_score(real_result, pred_result, return_dict=True)
+    scores, _ = reliability_score(real_result, pred_result, return_dict=True)
     accuracy0 = penalize(scores, penalty=0)
     accuracy5 = penalize(scores, penalty=5)
     accuracy10 = penalize(scores, penalty=10)
@@ -223,6 +274,7 @@ if __name__ == "__main__":
 
     print(f"RS Scores: RS0: {accuracy0:.3f}, RS5: {accuracy5:.3f}, RS10: {accuracy10:.3f}, RSN: {accuracyN:.3f}")
 
+    _, score_dict = reliability_score(real_result, pred_result, penalty=10, return_dict=True)
 
     # Calculate threshold for filtering unanswerable queries
     threshold = get_threshold(id2maxent, score_dict)
@@ -265,7 +317,7 @@ if __name__ == "__main__":
     write_label(SCORING_OUTPUT_DIR, label_y)
 
 
-    SCORING_OUTPUT_DIR = os.path.join(RESULT_DIR, f'{exp_name}_prediction_with_entropy.json')
+    SCORING_OUTPUT_DIR = os.path.join(RESULT_DIR, f'{exp_name}_prediction_with_entropy_{best_val_loss:.4f}.json')
     write_label(SCORING_OUTPUT_DIR, label_with_entropy)
 
     # Verify the file creation

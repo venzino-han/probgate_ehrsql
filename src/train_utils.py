@@ -184,7 +184,7 @@ def train(tokenizer, model, train_loader, optimizer, step=0, valid_loader=None, 
             # 1 times weight for sql result correct
             wieght = 1
 
-            if epoch > 8:
+            if epoch > 100:
                 sql_results = get_sql_query_result_from_batch(tokenizer, model, batch, args)
                 batch_size = len(sql_results)
                 wieght = 0
