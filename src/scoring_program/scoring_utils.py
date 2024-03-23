@@ -47,7 +47,7 @@ def execute_all_distributed(dict, db_path, tag, num_workers):
     pool.join()
     return exec_result
 
-def reliability_score(real_result, pred_result, return_dict=False):
+def reliability_score(real_result, pred_result, penalty=1, return_dict=False):
 
     reliablity_score = []
     reliablity_score_dict = {}
@@ -64,10 +64,10 @@ def reliability_score(real_result, pred_result, return_dict=False):
             score = 0
         # x in ANS; g(x)=1; Acc(x)=0
         elif ans_real != 'null' and exec_acc == False:
-            score = -1
+            score = -1*penalty
         # x in UnANS; g(x)=1
         elif ans_real == 'null' and ans_pred != 'null':
-            score = -1
+            score = -1*penalty
         # x in UnANS; g(x)=0
         elif ans_real == 'null' and ans_pred == 'null':
             score = 1
