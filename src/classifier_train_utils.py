@@ -15,6 +15,9 @@ from sql_utils import get_sql_query_result_from_batch
 
 from train_utils import save_model
 
+def weighted_mse_loss(input, target, weight):
+    return (weight * (input - target) ** 2)
+
 def train(tokenizer, model, train_loader, optimizer, step=0, valid_loader=None, best_metric=-1, scheduler=None, args=None):
     """
     Conduct the training process for a given model.
@@ -52,7 +55,7 @@ def train(tokenizer, model, train_loader, optimizer, step=0, valid_loader=None, 
             weights = torch.ones_like(pred, dtype=torch.bfloat16).to(args.device)
             weights[(pred > 0.5) & (labels < 0.5)] *= 10.4
 
-            loss = torch.nn.BCEWithLogitsLoss(pos_weight=weights)(pred, labels)
+            loss = weighted_mse_loss(pred, labels, weights).mean()
             loss.backward()
 
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
