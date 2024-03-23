@@ -1,5 +1,5 @@
 from transformers import T5Tokenizer
-from data_preprocess import NEW_TRAIN_DIR,  NEW_VALID_DIR,  NEW_TEST_DIR,  RESULT_DIR,  TABLES_PATH,  DB_ID, DB_PATH
+from configs import NEW_TRAIN_DIR,  NEW_VALID_DIR,  NEW_TEST_DIR,  RESULT_DIR,  TABLES_PATH,  DB_ID, DB_PATH
 from dataset import T5Dataset
 
 import os
@@ -60,7 +60,7 @@ def add_default_args(parser):
     parser.add_argument("--seed", type=int, default=0)
 
     # generation parameters
-    parser.add_argument("--num_beams", type=int, default=1)
+    parser.add_argument("--num_beams", type=int, default=3)
     parser.add_argument("--num_samples", type=int, default=1)
     return parser
 
@@ -176,7 +176,6 @@ def train(tokenizer, model, train_loader, optimizer, step=0, valid_loader=None, 
             loss = model(input_ids=source_ids, attention_mask=attention_mask, labels=labels)[0]
 
             # Generate sql & run sql
-            sql_results = get_sql_query_result_from_batch(tokenizer, model, batch, args)
 
             # print(sql_results[:5])
             # print(sql_results_labels[:5])
@@ -184,15 +183,19 @@ def train(tokenizer, model, train_loader, optimizer, step=0, valid_loader=None, 
             # additional loss weigth for sql result
             # 10 times weight for sql result wrong or query for null answer
             # 1 times weight for sql result correct
-            batch_size = len(sql_results)
-            wieght = 0
-            for sql_result, sql_result_label in zip(sql_results, sql_results_labels):
-                if sql_result == sql_result_label:
-                    wieght += 1/batch_size
-                elif (sql_result == 'null') and (sql_result_label != 'null'):
-                    wieght += 1/batch_size
-                else:
-                    wieght += 10/batch_size
+            wieght = 1
+
+            if epoch > 8:
+                sql_results = get_sql_query_result_from_batch(tokenizer, model, batch, args)
+                batch_size = len(sql_results)
+                wieght = 0
+                for sql_result, sql_result_label in zip(sql_results, sql_results_labels):
+                    if sql_result == sql_result_label:
+                        wieght += 1/batch_size
+                    elif (sql_result == 'null') and (sql_result_label != 'null'):
+                        wieght += 1/batch_size
+                    else:
+                        wieght += 10/batch_size
 
             # Normalize loss to account for gradient accumulation
             loss = torch.mean(loss)*wieght / args.gradient_accumulation_steps
@@ -268,51 +271,51 @@ def train(tokenizer, model, train_loader, optimizer, step=0, valid_loader=None, 
         if args.save_every_epoch:
             save_model(model, optimizer, scheduler, epoch, best_metric, args, name=f"{epoch}")
     
-    for batch in tqdm(valid_loader):
-        model.train() 
-        # Extract and send batch data to the specified device
-        source_ids = batch["source_ids"].to(args.device)
-        attention_mask = batch["source_mask"].to(args.device)
-        labels = batch["target_ids"].to(args.device)
-        sql_results_labels = batch["sql_result_labels"]
+    # for batch in tqdm(valid_loader):
+    #     model.train() 
+    #     # Extract and send batch data to the specified device
+    #     source_ids = batch["source_ids"].to(args.device)
+    #     attention_mask = batch["source_mask"].to(args.device)
+    #     labels = batch["target_ids"].to(args.device)
+    #     sql_results_labels = batch["sql_result_labels"]
 
-            # Making padded ids (pad=0) are set to -100, which means ignore for loss calculation
-        labels[labels[:,:]==tokenizer.pad_token_id] = -100
-        labels = labels.to(args.device)
+    #         # Making padded ids (pad=0) are set to -100, which means ignore for loss calculation
+    #     labels[labels[:,:]==tokenizer.pad_token_id] = -100
+    #     labels = labels.to(args.device)
 
-        # Forward pass and calculate loss
-        loss = model(input_ids=source_ids, attention_mask=attention_mask, labels=labels)[0]
+    #     # Forward pass and calculate loss
+    #     loss = model(input_ids=source_ids, attention_mask=attention_mask, labels=labels)[0]
 
-        # Generate sql & run sql
-        sql_results = get_sql_query_result_from_batch(tokenizer, model, batch, args)
+    #     # Generate sql & run sql
+    #     sql_results = get_sql_query_result_from_batch(tokenizer, model, batch, args)
 
-        # print(sql_results[:5])
-        # print(sql_results_labels[:5])
+    #     # print(sql_results[:5])
+    #     # print(sql_results_labels[:5])
 
-        # additional loss weigth for sql result
-        # 10 times weight for sql result wrong or query for null answer
-        # 1 times weight for sql result correct
-        batch_size = len(sql_results)
-        wieght = 0
-        for sql_result, sql_result_label in zip(sql_results, sql_results_labels):
-            if sql_result == sql_result_label:
-                wieght += 1/batch_size
-            elif (sql_result == 'null') and (sql_result_label != 'null'):
-                wieght += 1/batch_size
-            else:
-                wieght += 10/batch_size
+    #     # additional loss weigth for sql result
+    #     # 10 times weight for sql result wrong or query for null answer
+    #     # 1 times weight for sql result correct
+    #     batch_size = len(sql_results)
+    #     wieght = 0
+    #     for sql_result, sql_result_label in zip(sql_results, sql_results_labels):
+    #         if sql_result == sql_result_label:
+    #             wieght += 1/batch_size
+    #         elif (sql_result == 'null') and (sql_result_label != 'null'):
+    #             wieght += 1/batch_size
+    #         else:
+    #             wieght += 10/batch_size
 
-        # Normalize loss to account for gradient accumulation
-        loss = torch.mean(loss)*wieght / args.gradient_accumulation_steps
-        loss.backward()
+    #     # Normalize loss to account for gradient accumulation
+    #     loss = torch.mean(loss)*wieght / args.gradient_accumulation_steps
+    #     loss.backward()
 
-        # Gradient accumulation logic
-        if batch_idx % args.gradient_accumulation_steps == 0:
-            # Clip gradients to avoid exploding gradient problem
-            torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-            optimizer.step()  # Update model parameters
-            model.zero_grad()  # Reset gradients
-            step += 1
+    #     # Gradient accumulation logic
+    #     if batch_idx % args.gradient_accumulation_steps == 0:
+    #         # Clip gradients to avoid exploding gradient problem
+    #         torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+    #         optimizer.step()  # Update model parameters
+    #         model.zero_grad()  # Reset gradients
+    #         step += 1
     model.eval()
     return best_metric
 
@@ -426,7 +429,7 @@ def get_threshold(id2maxent, score_dict):
 # --exclude_unans=1
 if __name__ == "__main__":
 
-    exp_name = "t5_text2sql_excute"
+    exp_name = "t5_text2sql_schema"
     model_name = "gaussalgo/T5-LM-Large-text2sql-spider"
     # model_name = "sangryul/Flan-T5-XL-text2sql-spider"
     ARGS_STR = f"""
@@ -436,17 +439,19 @@ if __name__ == "__main__":
     --valid_data_dir={NEW_VALID_DIR} \
     --test_data_dir={NEW_TEST_DIR} \
     --tables_file={TABLES_PATH} \
-    --train_epochs=10 \
-    --train_batch_size=8 \
+    --train_epochs=20 \
+    --train_batch_size=4 \
+    --valid_batch_size=8 \
+    --test_batch_size=8 \
     --gradient_accumulation_steps=1 \
     --learning_rate=1e-4 \
     --report_every_step=10 \
     --eval_every_step=10 \
     --bf16=1\
     --db_id=mimic_iv\
+    --use_schema_info=1\
     --max_target_length=512\
     """
-    # --use_schema_info=1\
     # --binary_classification=1
     # Define and parse command line arguments for model configuration
     # exp_name='t5-baseline'
@@ -591,20 +596,19 @@ if __name__ == "__main__":
     valid_eval = generate_sql(tokenizer, model, valid_loader, args)
     
     # binary classification score
-    from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score
+    from sklearn.metrics import accuracy_score, recall_score, precision_score, f1_score, roc_auc_score
     binary_preds = np.array([1 if sample['pred'] == 'null' else 0 for sample in valid_eval])
     binary_labels = np.array([1 if sample['real'] == 'null' else 0 for sample in valid_eval])
     binary_accuracy = accuracy_score(binary_labels, binary_preds)
     binary_recall = recall_score(binary_labels, binary_preds)
     binary_precision = precision_score(binary_labels, binary_preds)
     binary_f1 = f1_score(binary_labels, binary_preds)
+    binary_auc = roc_auc_score(binary_labels, binary_preds)
 
     print(f"""
             Binary Classification Scores: 
             Accuracy: {binary_accuracy:.3f}, 
-            Recall: {binary_recall:.3f}, 
-            Precision: {binary_precision:.3f}, 
-            F1: {binary_f1:.3f}
+            AUC: {binary_auc:.3f},
             """)
 
 
@@ -658,6 +662,8 @@ if __name__ == "__main__":
     # Apply the threshold to uncertain predictions
     label_y = {sample['id']: 'null' if threshold < max(sample['entropy']) else post_process_sql(sample['pred']) for sample in test_eval}
 
+    label_with_entropy = {sample['id']: (post_process_sql(sample['pred']), max(sample['entropy'])) for sample in test_eval}
+
     # label_y = {sample['id']: sample['pred'] for sample in test_eval}
 
     import locale; locale.getpreferredencoding = lambda: "UTF-8" # if necessary
@@ -667,6 +673,10 @@ if __name__ == "__main__":
     os.makedirs(RESULT_DIR, exist_ok=True)
     SCORING_OUTPUT_DIR = os.path.join(RESULT_DIR, 'prediction.json')
     write_label(SCORING_OUTPUT_DIR, label_y)
+
+
+    SCORING_OUTPUT_DIR = os.path.join(RESULT_DIR, f'{exp_name}_prediction_with_entropy.json')
+    write_label(SCORING_OUTPUT_DIR, label_with_entropy)
 
     # Verify the file creation
     print("Listing files in RESULT_DIR:")

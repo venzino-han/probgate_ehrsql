@@ -9,7 +9,6 @@ DB_ID = 'mimic_iv'
 SAMPLE_DATA_DIR = 'sample_data'
 BASE_DATA_DIR = 'data/mimic_iv'
 RESULT_DIR = 'sample_result_submission/'
-SCORE_PROGRAM_DIR = 'scoring_program/'
 
 # File paths for the dataset and labels
 TABLES_PATH = os.path.join('data', DB_ID, 'tables.json')               # JSON containing database schema
@@ -21,6 +20,18 @@ DB_PATH = os.path.join('data', DB_ID, f'{DB_ID}.sqlite')               # Databas
 NEW_TRAIN_DIR = os.path.join(SAMPLE_DATA_DIR, '__train')
 NEW_VALID_DIR = os.path.join(SAMPLE_DATA_DIR, '__valid')
 NEW_TEST_DIR = os.path.join(BASE_DATA_DIR, 'valid')
+
+
+print(f"DB_ID : {DB_ID}")
+print(f"TABLES_PATH : {TABLES_PATH}")
+print(f"TRAIN_DATA_PATH : {TRAIN_DATA_PATH}")
+print(f"TRAIN_LABEL_PATH : {TRAIN_LABEL_PATH}")
+print(f"VALID_DATA_PATH : {VALID_DATA_PATH}")
+print(f"DB_PATH : {DB_PATH}")
+print(f"NEW_TRAIN_DIR : {NEW_TRAIN_DIR}")
+print(f"NEW_VALID_DIR : {NEW_VALID_DIR}")
+print(f"NEW_TEST_DIR : {NEW_TEST_DIR}")
+
 
 from utils.data_io import read_json as read_data
 from utils.data_io import write_json as write_data
