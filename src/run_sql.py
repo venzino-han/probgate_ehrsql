@@ -9,7 +9,7 @@ from collections import Counter
 from tqdm import tqdm
 
 file_name = ''
-file_path = '{file_name}.json'
+file_path = f'{file_name}.json'
 
 # Directory paths for database, results and scoring program
 DB_ID = 'mimic_iv'

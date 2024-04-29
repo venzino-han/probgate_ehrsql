@@ -1,7 +1,7 @@
 # ProbGate at EHRSQL 2024
 
 This repository contains the code and data about the project:
-[ProbGate at EHRSQL 2024: Enhancing SQL Query Generation Accuracy through Probabilistic Threshold Filtering and Error Handling](https://arxiv.org/pdf/2404.16659)
+[ProbGate at EHRSQL 2024: Enhancing SQL Query Generation Accuracy through Probabilistic Threshold Filtering and Error Handling](https://arxiv.org/abs/2404.16659)
 
 
 This is part of the shared tasks at [NAACL 2024 - Clinical NLP](https://clinical-nlp.github.io/2024).
@@ -29,25 +29,22 @@ Please run `./src/chatgpt_sql_finetuning.ipynb`. you need your own `<your open a
 Suggestion : for the better result you can use LLM specialed for Text2SQL task like [sqlcoder](https://huggingface.co/defog/sqlcoder-7b-2)
 
 ### Inference
-Please run `./src/chatgpt_sql_inference.ipynb`. you need your own `<your open ai api key>`. You can use either valid or test dataset. Please see `src/data/mimic_iv/` folder. The output format is either `pkl` or `json` file.
-### ProbGate
-Please run `./src/chatgpt_sql_inference.ipynb`. you need your own `<your open ai api key>`. The output format is either `pkl` or `json` file.
+Please run `./src/chatgpt_sql_inference.ipynb`. you need your own `<your open ai api key>`. You can use either `valid` or `test` dataset. Please see `src/data/mimic_iv/` folder. The output format is either `pkl` or `json` file.
 
----
-For the convenience we share `log_probability_final_test.json` and `log_probability_test_new.pickle` file after training and inference with `test` dataset.
+For the convenience, we share `log_probability_final_test.json` and `log_probability_test_new.pickle` file after training and inference with `test` dataset.
 
 ### ProbGate
 Please run `./src/filter_log_probability.ipynb` for ProbGate. Like we described in the original paper. we set `k` into 425, `t` into 10.
 
 ### Grammatical Errors Filtering
-Please run `./src/run_sql_check.py` for the GEF. After this, you can get your final answer json files
+Please run `./src/run_sql_check.py` for the GEF. After this, you can get your final answer json file.
 
 ### (Optional) Execute SQL statement
-Please run `./src/run_sql.py` to get the inferenced answer of executing generated sql statement(if it is answerable).
+Please run `./src/run_sql.py` to get the inferenced answer of executing generated sql statement(if it is answerable) with your final json file.
 
 
 ## Citation
-Please cite with below link. Thank you
+Please cite with below link. Also, If you have any question, contact to the corresponding author. Thank you
 ```
 @article{kim2024probgate,
   title={ProbGate at EHRSQL 2024: Enhancing SQL Query Generation Accuracy through Probabilistic Threshold Filtering and Error Handling},
