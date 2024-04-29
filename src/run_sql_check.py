@@ -8,27 +8,35 @@ import numpy as np
 import pandas as pd
 from collections import Counter
 from tqdm import tqdm
+from scoring_program.postprocessing import post_process_sql
 
 DB_PATH = './data/mimic_iv/mimic_iv.sqlite'
 
 if __name__ == "__main__":
-    file_name = 'prediction_77'
-    file_name = 'prediction'
+    submission= './submission/'
+    file_name = 'log_prob_420_bottom_10'
 
-    file_path = f'./sample_result_submission/{file_name}.json'
+    # file_path = f'./sample_result_submission/{file_name}.json'
+    file_path = f'{submission}{file_name}.json'
 
     with open(file_path, 'r') as file:
         data = json.load(file)
 
+    for sql in list(data.items())[:5]:
+        print(sql)
 
-    print(list(data.items())[:20])
+    for k, v in data.items():
+        data[k] = post_process_sql(v)
+
     answer = execute_all(data, db_path=DB_PATH, tag='real')
 
-    print(list(answer.items())[:20])
+    for ans in list(answer.items())[:5]:
+        print(ans)
 
     count = 0
     for k, v in answer.items():
-        if "error" in v or v==[] or v=="[]":
+        if "error" in v or v==[] or v=='[]' or v=="['']":
+            print("ERROR", k," ", v)
             data[k] = "null"
             count += 1
         else:
@@ -37,16 +45,5 @@ if __name__ == "__main__":
     print(count)
 
     # Save the merged data to a new JSON file
-    with open(f"sample_result_submission/sql_check_{file_name}.json", 'w') as file:
+    with open(f"{submission}/sql_check_{file_name}.json", 'w') as file:
         json.dump(data, file, indent=4)
-
-    # store_file=f"sample_result_submission/answer_{file_name}.json"
-    # with open(store_file, 'w') as file:
-    #     json.dump(answer, file, indent=4)
-
-    # # zip the file
-    # import zipfile
-    # with zipfile.ZipFile(f"{store_file}.zip", 'w') as zipf:
-    #     zipf.write(store_file, os.path.basename(store_file))
-
-
