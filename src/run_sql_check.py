@@ -14,7 +14,7 @@ DB_PATH = './data/mimic_iv/mimic_iv.sqlite'
 
 if __name__ == "__main__":
     submission= './submission/'
-    file_name = 'log_prob_420_bottom_10'
+    file_name = 'log_prob_425_bottom_10'
 
     # file_path = f'./sample_result_submission/{file_name}.json'
     file_path = f'{submission}{file_name}.json'

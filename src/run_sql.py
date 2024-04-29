@@ -8,8 +8,8 @@ import pandas as pd
 from collections import Counter
 from tqdm import tqdm
 
-file_name = 'prediction_best'
-file_path = f'sample_result_submission/{file_name}.json'
+file_name = ''
+file_path = '{file_name}.json'
 
 # Directory paths for database, results and scoring program
 DB_ID = 'mimic_iv'
@@ -25,7 +25,7 @@ print(list(data.items())[:20])
 answer = execute_all(data, db_path=DB_PATH, tag='real')
 answer
 
-store_file=f"sample_result_submission/answer_{file_name}.json"
+store_file=f"submission/answer_{file_name}.json"
 with open(store_file, 'w') as file:
     json.dump(answer, file, indent=4)
 
