@@ -46,10 +46,24 @@ Please run `./src/run_sql.py` to get the inferenced answer of executing generate
 ## Citation
 Please cite with below link. Also, If you have any question, contact to the corresponding author. Thank you
 ```
-@article{kim2024probgate,
-  title={ProbGate at EHRSQL 2024: Enhancing SQL Query Generation Accuracy through Probabilistic Threshold Filtering and Error Handling},
-  author={Kim, Sangryul and Han, Donghee and Kim, Sehyun},
-  journal={arXiv preprint arXiv:2404.16659},
-  year={2024}
+@inproceedings{kim-etal-2024-probgate,
+    title = "{P}rob{G}ate at {EHRSQL} 2024: Enhancing {SQL} Query Generation Accuracy through Probabilistic Threshold Filtering and Error Handling",
+    author = "Kim, Sangryul  and
+      Han, Donghee  and
+      Kim, Sehyun",
+    editor = "Naumann, Tristan  and
+      Ben Abacha, Asma  and
+      Bethard, Steven  and
+      Roberts, Kirk  and
+      Bitterman, Danielle",
+    booktitle = "Proceedings of the 6th Clinical Natural Language Processing Workshop",
+    month = jun,
+    year = "2024",
+    address = "Mexico City, Mexico",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2024.clinicalnlp-1.65",
+    pages = "687--696",
+    abstract = "Recently, deep learning-based language models have significantly enhanced text-to-SQL tasks, with promising applications in retrieving patient records within the medical domain. One notable challenge in such applications is discerning unanswerable queries. Through fine-tuning model, we demonstrate the feasibility of converting medical record inquiries into SQL queries. Additionally, we introduce an entropy-based method to identify and filter out unanswerable results. We further enhance result quality by filtering low-confidence SQL through log probability-based distribution, while grammatical and schema errors are mitigated by executing queries on the actual database.We experimentally verified that our method can filter unanswerable questions, which can be widely utilized even when the parameters of the model are not accessible, and that it can be effectively utilized in practice.",
 }
+
 ```
